@@ -182,25 +182,29 @@ def build_xray_config(srv: dict, socks_port: int, http_port: int) -> dict:
     }
 
     # ---- TLS / Reality ----
-    if security in ("tls", "reality"):
+    if security == "tls":
         tls = {
             "serverName": p.get("sni") or srv["host"],
             "fingerprint": p.get("fp", "chrome"),
-            "allowInsecure": p.get("allowInsecure", "0") == "1",
         }
+        if p.get("allowInsecure") == "1":
+            tls["allowInsecure"] = True
         alpn = p.get("alpn")
         if alpn:
             tls["alpn"] = [x.strip() for x in alpn.split(",") if x.strip()]
-
-        if security == "reality":
-            tls["realitySettings"] = {
-                "show": False,
-                "publicKey": p.get("pbk", ""),
-                "shortId": p.get("sid", ""),
-                "spiderX": p.get("spx", "/"),
-                "serverNames": [p.get("sni") or srv["host"]],
-            }
         stream["tlsSettings"] = tls
+
+    elif security == "reality":
+        # В новых версиях xray (v24+) realitySettings лежит плоско в streamSettings,
+        # а не внутри tlsSettings, и для клиента поле называется serverName (не serverNames).
+        stream["realitySettings"] = {
+            "show": False,
+            "publicKey": p.get("pbk", ""),
+            "shortId": p.get("sid", ""),
+            "spiderX": p.get("spx", "/"),
+            "fingerprint": p.get("fp", "chrome"),
+            "serverName": p.get("sni") or srv["host"],
+        }
 
     # ---- Транспорт ----
     if network == "ws":
@@ -208,7 +212,9 @@ def build_xray_config(srv: dict, socks_port: int, http_port: int) -> dict:
         if p.get("path"):
             ws["path"] = p["path"]
         if p.get("host"):
-            ws["headers"] = {"Host": p["host"]}
+            # Современный xray использует wsSettings.host напрямую;
+            # headers.Host объявлен deprecated.
+            ws["host"] = p["host"]
         stream["wsSettings"] = ws
 
     elif network == "grpc":
@@ -283,7 +289,11 @@ def build_xray_config(srv: dict, socks_port: int, http_port: int) -> dict:
         ],
         "routing": {
             "domainStrategy": "IPIfNonMatch",
-            "rules": [{"type": "field", "outboundTag": "proxy"}],
+            # Нельзя оставлять правило без полей — xray (>= v24) ругается
+            # "this rule has no effective fields". Ловим весь трафик по IP.
+            "rules": [
+                {"type": "field", "outboundTag": "proxy", "ip": ["0.0.0.0/0", "::/0"]},
+            ],
         },
     }
 
